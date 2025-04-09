@@ -41,6 +41,7 @@ library:
     - directory
     - filepath
     - resourcet
+    - safe-exceptions
   default-extensions:
     - BlockArguments
     - TypeApplications
