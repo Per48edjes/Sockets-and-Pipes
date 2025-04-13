@@ -7,4 +7,6 @@ main = do
   writeGreetingFile
   putStrLn "Greeting file written."
   putStrLn "You can check the file at ~/.local/share/sockets-and-pipes/greeting.txt"
-  howManyHandles
+  printFileContentsUpperCase
+
+-- howManyHandles
