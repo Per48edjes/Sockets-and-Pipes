@@ -41,6 +41,8 @@ library:
     - directory
     - filepath
     - resourcet
+    - text
+    - network
     - safe-exceptions
   default-extensions:
     - BlockArguments

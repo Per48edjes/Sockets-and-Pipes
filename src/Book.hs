@@ -11,9 +11,15 @@ import qualified System.IO as IO
 import qualified Control.Exception.Safe as Ex
 import Data.Maybe (fromJust)
 
+import qualified Data.ByteString as BS
+
 import qualified Data.Char as Char
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as T
+
+import qualified Network.Socket as S
+import qualified Network.Socket.ByteString as S
 
 getDataDir :: IO FilePath
 getDataDir = do
@@ -28,6 +34,15 @@ writeGreetingFile = runResourceT @IO do
     liftIO $ handlePrintTest h
     liftIO $ IO.hPutStrLn h "hello"
     liftIO $ IO.hPutStrLn h "world"
+
+copyGreetingFile = runResourceT @IO do
+    dir <- liftIO getDataDir
+    (_, h1) <- binaryFileResource (dir </> "greeting.txt") ReadMode
+    (_, h2) <- binaryFileResource (dir </> "greeting2.txt") WriteMode
+    liftIO $ repeatUntil (BS.hGetSome h1 1024) BS.null (BS.hPut h2)
+
+binaryFileResource :: FilePath -> IOMode -> ResourceT IO (ReleaseKey, Handle)
+binaryFileResource path mode = allocate (IO.openBinaryFile path mode) IO.hClose
 
 -- 1.5 Exercise 1
 fileResource :: FilePath -> IOMode -> ResourceT IO (ReleaseKey, Handle)
@@ -123,3 +138,74 @@ repeatUntil :: (Monad m) => m c -> (c -> Bool) -> (c -> m a) -> m ()
 repeatUntil m condition action = do
     chunk <- m
     unless (condition chunk) (action chunk >> repeatUntil m condition action)
+
+-- 3.6 Exercise 1
+-- >>> greet $ fromString "李某 "
+greet :: BS.ByteString -> IO ()
+greet nameBS = case T.decodeUtf8' nameBS of
+    Left _ -> putStrLn "Invalid byte string"
+    Right nameText -> T.putStrLn (T.pack "Hello, " <> nameText)
+
+-- 3.6 Exercise 2
+asciiUpper :: BS.ByteString -> BS.ByteString
+asciiUpper = BS.map f
+  where
+    f c
+        | 97 <= c && c <= 122 = c - 32
+        | otherwise = c
+
+makeFriendSafely :: S.AddrInfo -> IO ()
+makeFriendSafely addressInfo = runResourceT @IO do
+    (_, s) <- allocate (S.openSocket addressInfo) S.close
+    liftIO do
+        S.connect s $ S.addrAddress addressInfo
+        S.sendAll s $ T.encodeUtf8 $ T.pack "\r\n"
+        -- Construct a simple HTTP GET request
+        -- let request = T.encodeUtf8 $ T.pack "GET / HTTP/1.1\r\nHost: google.com\r\n\r\n"
+        -- S.sendAll s request
+        repeatUntil (S.recv s 1024) BS.null BS.putStr
+        S.gracefulClose s 1000
+
+findHaskellWebsite :: IO S.AddrInfo
+findHaskellWebsite = do
+    addrInfos <-
+        S.getAddrInfo
+            (Just S.defaultHints{S.addrSocketType = S.Stream})
+            (Just "www.haskell.org")
+            (Just "http")
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> return x
+
+-- 4.5 Exercise 10
+openAndConnect :: S.AddrInfo -> ResourceT IO (ReleaseKey, S.Socket)
+openAndConnect addressInfo = do
+    (releaseKey, s) <- allocate (S.openSocket addressInfo) S.close
+    liftIO do
+        S.setSocketOption s S.UserTimeout 1000
+        S.connect s (S.addrAddress addressInfo)
+    return (releaseKey, s)
+
+-- 4.5 Exercise 11
+findGopherWebsite :: IO ()
+findGopherWebsite = do
+    addrInfos <-
+        S.getAddrInfo
+            (Just S.defaultHints{S.addrSocketType = S.Stream})
+            (Just "www.quux.org")
+            (Just "gopher")
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> makeFriendSafely x
+
+-- 4.5 Exercise 12
+resolve :: S.ServiceName -> S.HostName -> IO S.AddrInfo
+resolve sn hn = do
+    addrInfos <-
+        S.getAddrInfo
+            (Just S.defaultHints{S.addrSocketType = S.Stream})
+            (Just hn)
+            (Just sn)
+    case addrInfos of
+        [] -> fail "getAddrInfo returned []"
+        x : _ -> return x
