@@ -1,4 +1,6 @@
-module Book (writeGreetingFile, howManyHandles, printFileContentsUpperCase) where
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+module Book (makeHTTPRequest) where
 
 import Relude
 import Prelude ()
@@ -12,6 +14,7 @@ import qualified Control.Exception.Safe as Ex
 import Data.Maybe (fromJust)
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 
 import qualified Data.Char as Char
 import qualified Data.Text as T
@@ -20,6 +23,13 @@ import qualified Data.Text.IO as T
 
 import qualified Network.Socket as S
 import qualified Network.Socket.ByteString as S
+
+import Network.Simple.TCP (HostPreference (..), serve)
+import qualified Network.Simple.TCP as Net
+
+import qualified ASCII as A
+import qualified ASCII.Char as A
+import ASCII.Decimal (Digit (..))
 
 getDataDir :: IO FilePath
 getDataDir = do
@@ -122,6 +132,7 @@ unParen t = do
 
 -- 2.3 Exercise 5
 -- >>> characterCount "greeting.txt"
+characterCount :: FilePath -> IO Int
 characterCount fp = runResourceT @IO do
     dir <- liftIO getDataDir
     (_, h) <- fileResource (dir </> fp) ReadMode
@@ -182,7 +193,7 @@ openAndConnect :: S.AddrInfo -> ResourceT IO (ReleaseKey, S.Socket)
 openAndConnect addressInfo = do
     (releaseKey, s) <- allocate (S.openSocket addressInfo) S.close
     liftIO do
-        S.setSocketOption s S.UserTimeout 1000
+        -- S.setSocketOption s S.UserTimeout 1000
         S.connect s (S.addrAddress addressInfo)
     return (releaseKey, s)
 
@@ -209,3 +220,84 @@ resolve sn hn = do
     case addrInfos of
         [] -> fail "getAddrInfo returned []"
         x : _ -> return x
+
+crlf :: ByteString
+crlf = A.charListToByteString [A.CarriageReturn, A.LineFeed]
+
+line :: ByteString -> ByteString
+line x = x <> crlf
+
+helloRequestString :: ByteString
+helloRequestString =
+    line [A.string|GET /hello.txt HTTP/1.1|]
+        <> line [A.string|User-Agent: curl/7.16.3|]
+        <> line [A.string|Accept-Language: en, mi|]
+        <> line [A.string||]
+
+helloResponseString :: ByteString
+helloResponseString =
+    line [A.string|HTTP/1.1 200 OK|]
+        <> line [A.string|Content-Type: text/plain; charset=us-ascii|]
+        <> line [A.string|Content-Length: 6|]
+        <> line [A.string||]
+        <> [A.string|Hello!|]
+
+ourFirstServer = serve @IO HostAny "8000" \(s, a) -> do
+    putStrLn ("New connection from " <> show a)
+    Net.send s helloResponseString
+
+-- 5.6 Exercise 13
+repeatUntilNothing :: (Monad m) => m (Maybe chunk) -> (chunk -> m x) -> m ()
+repeatUntilNothing m action = repeatUntil m isNothing (action . fromJust)
+
+-- 5.6 Exercise 14
+makeHTTPRequest :: Net.ServiceName -> Net.HostName -> IO ()
+makeHTTPRequest sn hn = runResourceT @IO do
+    addrInfo <- lift $ resolve sn hn
+    (_, s) <- openAndConnect addrInfo
+    Net.send s request
+    lift $ repeatUntilNothing (Net.recv s 1024) BS.putStr
+    lift $ S.gracefulClose s 1000
+  where
+    request = helloRequestString
+
+data Request = Request RequestLine [HeaderField] (Maybe MessageBody)
+data Response = Response StatusLine [HeaderField] (Maybe MessageBody)
+
+data RequestLine = RequestLine Method RequestTarget HttpVersion
+data StatusLine = StatusLine HttpVersion StatusCode ReasonPhrase
+
+data HeaderField = HeaderField FieldName FieldValue
+newtype FieldName = FieldName BS.ByteString
+newtype FieldValue = FieldValue BS.ByteString
+
+newtype MessageBody = MessageBody LBS.ByteString
+
+data HttpVersion = HttpVersion A.Digit A.Digit
+
+newtype RequestTarget = RequestTarget BS.ByteString
+newtype Method = Method BS.ByteString
+
+data StatusCode = StatusCode A.Digit A.Digit A.Digit
+newtype ReasonPhrase = ReasonPhrase BS.ByteString
+
+-- 6.7 Exercise 16
+helloRequest :: Request
+helloRequest = Request start [host, lang] Nothing
+  where
+    start =
+        RequestLine
+            (Method [A.string|GET|])
+            ( RequestTarget
+                [A.string|./hello.txt|]
+            )
+            (HttpVersion Digit1 Digit1)
+    host =
+        HeaderField
+            ( FieldName [A.string|User-Agent|]
+            )
+            (FieldValue [A.string|curl/7.16.3|])
+    lang = HeaderField (FieldName [A.string|Accept-Language|]) (FieldValue [A.string|en, mi|])
+
+helloResponse :: Response
+helloResponse = Response (StatusLine (HttpVersion Digit1 Digit1) (StatusCode Digit2 Digit0 Digit0) (ReasonPhrase [A.string|OK|])) [HeaderField (FieldName [A.string|Content-Type|]) (FieldValue [A.string|text/plain; charset=us-ascii|]), HeaderField (FieldName [A.string|Content-Length|]) (FieldValue [A.string|6|])] (Just (MessageBody [A.string|Hello!|]))

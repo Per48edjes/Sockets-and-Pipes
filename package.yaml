@@ -44,6 +44,8 @@ library:
     - text
     - network
     - safe-exceptions
+    - ascii
+    - network-simple
   default-extensions:
     - BlockArguments
     - TypeApplications
